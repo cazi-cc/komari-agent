@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -17,7 +18,15 @@ var testTargets = []struct {
 	{"117.185.125.154:80"},
 }
 
+func requireNetworkTests(t *testing.T) {
+	t.Helper()
+	if os.Getenv("KOMARI_NETWORK_TESTS") != "1" {
+		t.Skip("set KOMARI_NETWORK_TESTS=1 to run external network probes")
+	}
+}
+
 func TestICMPPing(t *testing.T) {
+	requireNetworkTests(t)
 	timeout := 3 * time.Second
 	for _, tt := range testTargets {
 		t.Run(tt.target, func(t *testing.T) {
@@ -33,6 +42,7 @@ func TestICMPPing(t *testing.T) {
 }
 
 func TestTCPPing(t *testing.T) {
+	requireNetworkTests(t)
 	timeout := 3 * time.Second
 	for _, tt := range testTargets {
 		t.Run(tt.target, func(t *testing.T) {
@@ -48,6 +58,7 @@ func TestTCPPing(t *testing.T) {
 }
 
 func TestHTTPPing(t *testing.T) {
+	requireNetworkTests(t)
 	timeout := 3 * time.Second
 	for _, tt := range testTargets {
 		t.Run(tt.target, func(t *testing.T) {

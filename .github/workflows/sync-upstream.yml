@@ -1,0 +1,63 @@
+name: Sync Upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "29 3 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-sync-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Merge upstream into a review branch
+        env:
+          UPSTREAM_REPOSITORY: komari-monitor/komari-agent
+        run: |
+          set -euo pipefail
+          git config user.name "cazi-upstream-sync"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin main
+
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            echo "The fork already contains the current upstream main."
+            exit 0
+          fi
+
+          git checkout -B sync/upstream-main origin/main
+          git merge --no-edit upstream/main
+          go test ./...
+          git push --force-with-lease origin sync/upstream-main
+
+      - name: Create or update the review pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            exit 0
+          fi
+          if gh pr view sync/upstream-main --json number >/dev/null 2>&1; then
+            gh pr edit sync/upstream-main \
+              --title "chore: sync komari-monitor/komari-agent main" \
+              --body "Automated upstream merge. Review probe protocol compatibility and fork updater settings before merging."
+          else
+            gh pr create \
+              --base main \
+              --head sync/upstream-main \
+              --title "chore: sync komari-monitor/komari-agent main" \
+              --body "Automated upstream merge. Review probe protocol compatibility and fork updater settings before merging."
+          fi

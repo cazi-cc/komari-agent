@@ -386,9 +386,10 @@ func handleWebSocketMessages(conn *ws.SafeConn, protocolVersion int, done chan<-
 			ExecCommand string `json:"command,omitempty"`
 			ExecTaskID  string `json:"task_id,omitempty"`
 			// Ping
-			PingTaskID uint   `json:"ping_task_id,omitempty"`
-			PingType   string `json:"ping_type,omitempty"`
-			PingTarget string `json:"ping_target,omitempty"`
+			PingTaskID  uint            `json:"ping_task_id,omitempty"`
+			PingType    string          `json:"ping_type,omitempty"`
+			PingTarget  string          `json:"ping_target,omitempty"`
+			PingOptions v2.ProbeOptions `json:"ping_options,omitempty"`
 		}
 		err = json.Unmarshal(message_raw, &message)
 		if err != nil {
@@ -409,7 +410,7 @@ func handleWebSocketMessages(conn *ws.SafeConn, protocolVersion int, done chan<-
 			continue
 		}
 		if message.Message == "ping" || message.PingTaskID != 0 || message.PingType != "" || message.PingTarget != "" {
-			go NewPingTask(conn, protocolVersion, message.PingTaskID, message.PingType, message.PingTarget)
+			go NewPingTask(conn, protocolVersion, message.PingTaskID, message.PingType, message.PingTarget, message.PingOptions)
 			continue
 		}
 	}
@@ -432,13 +433,9 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			log.Printf("bad v2 exec params: %v", err)
 		}
 	case v2.MethodAgentPing:
-		var p struct {
-			TaskID uint   `json:"ping_task_id"`
-			Type   string `json:"ping_type"`
-			Target string `json:"ping_target"`
-		}
+		var p v2.PingParams
 		if err := v2.BindParams(params, &p); err == nil {
-			go NewPingTask(conn, 2, p.TaskID, p.Type, p.Target)
+			go NewPingTask(conn, 2, p.TaskID, p.Type, p.Target, p.Options)
 			return true
 		} else {
 			log.Printf("bad v2 ping params: %v", err)
