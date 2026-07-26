@@ -27,7 +27,7 @@ const (
 var (
 	tcpQualityRunning sync.Map
 	npingRTTRE        = regexp.MustCompile(`(?m)^RCVD[^\r\n]*\brtt=([0-9]+(?:\.[0-9]+)?)ms\b`)
-	npingReceivedRE   = regexp.MustCompile(`Rcvd:\s*([0-9]+)`)
+	npingTCPEventRE   = regexp.MustCompile(`^(SENT|RCVD)\s+\(([0-9]+(?:\.[0-9]+)?)s\)\s+TCP\b`)
 )
 
 func NewTCPQualityTask(conn *ws.SafeConn, params v2.TCPQualityParams) {
@@ -264,10 +264,6 @@ func runNpingBatch(npingPath string, target v2.TCPQualityTarget, payloadSize, co
 }
 
 func parseNpingBatchOutput(output string) ([]float64, int) {
-	received := 0
-	if match := npingReceivedRE.FindStringSubmatch(output); len(match) == 2 {
-		received, _ = strconv.Atoi(match[1])
-	}
 	matches := npingRTTRE.FindAllStringSubmatch(output, -1)
 	latencies := make([]float64, 0, len(matches))
 	for _, match := range matches {
@@ -277,7 +273,39 @@ func parseNpingBatchOutput(output string) ([]float64, int) {
 		}
 		latencies = append(latencies, latency)
 	}
-	return latencies, received
+	if len(latencies) > 0 {
+		return latencies, len(latencies)
+	}
+
+	// Nping 0.7.93 no longer prints rtt=... on RCVD lines. It calculates
+	// summary RTT against the most recent unmatched send, so mirror that
+	// behavior while counting only TCP responses.
+	pendingSends := make([]float64, 0)
+	for _, line := range strings.Split(output, "\n") {
+		match := npingTCPEventRE.FindStringSubmatch(strings.TrimSpace(line))
+		if len(match) != 3 {
+			continue
+		}
+		eventTime, err := strconv.ParseFloat(match[2], 64)
+		if err != nil || math.IsNaN(eventTime) || math.IsInf(eventTime, 0) || eventTime < 0 {
+			continue
+		}
+		if match[1] == "SENT" {
+			pendingSends = append(pendingSends, eventTime)
+			continue
+		}
+		if len(pendingSends) == 0 {
+			continue
+		}
+		last := len(pendingSends) - 1
+		latency := (eventTime - pendingSends[last]) * 1000
+		pendingSends = pendingSends[:last]
+		if latency < 0 || math.IsNaN(latency) || math.IsInf(latency, 0) {
+			continue
+		}
+		latencies = append(latencies, latency)
+	}
+	return latencies, len(latencies)
 }
 
 func floatQuantile(sortedValues []float64, percentile float64) float64 {
