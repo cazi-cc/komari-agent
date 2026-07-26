@@ -8,17 +8,19 @@ import (
 )
 
 const (
-	Version               = "2.0"
-	MethodAgentReport     = "agent.report"
-	MethodAgentBasicInfo  = "agent.basicInfo"
-	MethodAgentPingResult = "agent.pingResult"
-	MethodAgentTaskResult = "agent.taskResult"
-	MethodAgentExec       = "agent.exec"
-	MethodAgentPing       = "agent.ping"
-	MethodAgentMessage    = "agent.message"
-	MethodAgentEvent      = "agent.event"
-	MethodAgentTerminal   = "agent.terminal.request"
-	MethodAgentPull       = "agent.pull"
+	Version                     = "2.0"
+	MethodAgentReport           = "agent.report"
+	MethodAgentBasicInfo        = "agent.basicInfo"
+	MethodAgentPingResult       = "agent.pingResult"
+	MethodAgentTaskResult       = "agent.taskResult"
+	MethodAgentExec             = "agent.exec"
+	MethodAgentPing             = "agent.ping"
+	MethodAgentTCPQuality       = "agent.tcpQuality"
+	MethodAgentTCPQualityResult = "agent.tcpQualityResult"
+	MethodAgentMessage          = "agent.message"
+	MethodAgentEvent            = "agent.event"
+	MethodAgentTerminal         = "agent.terminal.request"
+	MethodAgentPull             = "agent.pull"
 )
 
 type Request struct {
@@ -118,6 +120,61 @@ type PingParams struct {
 	Type    string       `json:"ping_type"`
 	Target  string       `json:"ping_target"`
 	Options ProbeOptions `json:"ping_options,omitempty"`
+}
+
+type TCPQualityTarget struct {
+	Key          string `json:"key"`
+	Address      string `json:"address"`
+	Port         int    `json:"port"`
+	Province     string `json:"province"`
+	ProvinceCode string `json:"province_code"`
+	ISP          string `json:"isp"`
+	ISPCode      string `json:"isp_code"`
+	IPVersion    int    `json:"ip_version"`
+}
+
+type TCPQualityParams struct {
+	TaskID          uint               `json:"task_id"`
+	RunID           string             `json:"run_id"`
+	CatalogRevision string             `json:"catalog_revision"`
+	Targets         []TCPQualityTarget `json:"targets"`
+	StandardPackets int                `json:"standard_packets"`
+	LargeEnabled    bool               `json:"large_enabled"`
+	LargePackets    int                `json:"large_packets"`
+	DelayMS         int                `json:"delay_ms"`
+	TimeoutMS       int                `json:"timeout_ms"`
+	MaxParallel     int                `json:"max_parallel"`
+}
+
+type TCPQualityTargetResult struct {
+	TargetKey        string  `json:"target_key"`
+	Mode             string  `json:"mode"`
+	SamplesSent      int     `json:"samples_sent"`
+	SamplesReceived  int     `json:"samples_received"`
+	LossRatio        float64 `json:"loss_ratio"`
+	MinLatencyMS     float64 `json:"min_latency_ms,omitempty"`
+	MaxLatencyMS     float64 `json:"max_latency_ms,omitempty"`
+	P50LatencyMS     float64 `json:"p50_latency_ms,omitempty"`
+	P95LatencyMS     float64 `json:"p95_latency_ms,omitempty"`
+	AverageLatencyMS float64 `json:"average_latency_ms,omitempty"`
+	ErrorCode        string  `json:"error_code,omitempty"`
+}
+
+type TCPQualityResultParams struct {
+	TaskID          uint                     `json:"task_id"`
+	RunID           string                   `json:"run_id"`
+	CatalogRevision string                   `json:"catalog_revision"`
+	Results         []TCPQualityTargetResult `json:"results"`
+	ErrorCode       string                   `json:"error_code,omitempty"`
+	FinishedAt      time.Time                `json:"finished_at"`
+}
+
+func BuildTCPQualityResultPayload(params TCPQualityResultParams) interface{} {
+	return Request{
+		JSONRPC: Version,
+		Method:  MethodAgentTCPQualityResult,
+		Params:  params,
+	}
 }
 
 func BuildPingResultPayload(taskID uint, pingType string, value int, details *ProbeResultDetails, finishedAt time.Time) interface{} {

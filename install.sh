@@ -215,34 +215,49 @@ install_dependencies() {
 
     local deps="curl"
     local missing_deps=""
+    local need_nping=0
     for cmd in $deps; do
         if ! command -v $cmd >/dev/null 2>&1; then
             missing_deps="$missing_deps $cmd"
         fi
     done
+    if ! command -v nping >/dev/null 2>&1; then
+        need_nping=1
+    fi
 
-    if [ -n "$missing_deps" ]; then
+    if [ -n "$missing_deps" ] || [ "$need_nping" -eq 1 ]; then
         if [ "$EUID" -ne 0 ]; then
             log_error "Missing required dependencies:$missing_deps"
-            log_info "Install them with your system package manager, then run this script again."
+            if [ "$need_nping" -eq 1 ]; then
+                log_error "nping is required for TCP quality monitoring."
+            fi
+            log_info "Install the missing dependencies with your system package manager, then run this script again."
             exit 1
         fi
         # Check package manager and install dependencies
         if command -v apt >/dev/null 2>&1; then
             log_info "Using apt to install dependencies..."
             apt update
-            apt install -y $missing_deps
+            [ -z "$missing_deps" ] || apt install -y $missing_deps
+            [ "$need_nping" -eq 0 ] || apt install -y nmap
+        elif command -v dnf >/dev/null 2>&1; then
+            log_info "Using dnf to install dependencies..."
+            [ -z "$missing_deps" ] || dnf install -y $missing_deps
+            [ "$need_nping" -eq 0 ] || dnf install -y nmap
         elif command -v yum >/dev/null 2>&1; then
             log_info "Using yum to install dependencies..."
-            yum install -y $missing_deps
+            [ -z "$missing_deps" ] || yum install -y $missing_deps
+            [ "$need_nping" -eq 0 ] || yum install -y nmap
         elif command -v apk >/dev/null 2>&1; then
             log_info "Using apk to install dependencies..."
-            apk add $missing_deps
+            [ -z "$missing_deps" ] || apk add $missing_deps
+            [ "$need_nping" -eq 0 ] || apk add nmap
         elif command -v brew >/dev/null 2>&1; then
             log_info "Using Homebrew to install dependencies..."
-            brew install $missing_deps
+            [ -z "$missing_deps" ] || brew install $missing_deps
+            [ "$need_nping" -eq 0 ] || brew install nmap
         else
-            log_error "No supported package manager found (apt/yum/apk/brew)"
+            log_error "No supported package manager found (apt/dnf/yum/apk/brew)"
             exit 1
         fi
         
@@ -253,6 +268,10 @@ install_dependencies() {
                 exit 1
             fi
         done
+        if ! command -v nping >/dev/null 2>&1; then
+            log_error "Failed to install nping (usually provided by the nmap package)"
+            exit 1
+        fi
         log_success "Dependencies installed successfully"
     else
         log_success "Dependencies already satisfied"

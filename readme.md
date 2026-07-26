@@ -69,3 +69,14 @@ export AGENT_TOKEN="your-token"
 ```
 
 详见 `cmd/flags/flags.go` 及 `cmd/root.go`
+
+## Cazi TCP 质量探测
+
+本 fork 能接收配套 `cazi-cc/komari` 后端下发的 TCP SYN 质量任务：
+
+- 标准指标为 `TCP SYN 首包丢失率`、P50 和 P95 延迟；TcpQuality 项目将首包未响应称为“重传率”，它不等同于操作系统 TCP 栈的真实重传计数。
+- 实验性大小包使用 25% 的 300B 与 75% 的 1050B SYN 负载，只作为辅助指标。
+- 目标必须是后端目录下发的纯 IP 和端口，Agent 不接受域名或命令字符串；不执行 Speedtest，也不向第三方上传测试结果。
+- 每个 Agent 最多并行检测 4 个目标，同一任务不会重叠运行。
+
+Linux 安装脚本会检查 `nping`，缺少时通过系统包管理器安装 `nmap`。升级现有节点时，以配套 Komari 后台为该节点生成的一键命令为准，并继续保留 `--disable-web-ssh`。
