@@ -8,7 +8,11 @@ This fork keeps the upstream Komari agent protocol compatible while adding:
 - DNS, connect, TLS, TTFB, loss, jitter and min/max/average timing details;
 - connection-level Linux TCP retransmission counts through `TCP_INFO`;
 - privacy-safe resolved-address fingerprints instead of uploading raw target IPs;
-- self-updates from `cazi-cc/komari-agent`.
+- self-updates from `cazi-cc/komari-agent`;
+- Linux/macOS and Windows installers that resolve releases and binaries only
+  from `cazi-cc/komari-agent` by default, including snapshot prereleases.
 
 The weekly `Sync Upstream` workflow creates a review PR and never deploys or merges
-upstream changes automatically.
+upstream changes automatically. `KOMARI_AGENT_REPOSITORY` may override the
+distribution repository for controlled testing, but the production default must
+remain this fork.

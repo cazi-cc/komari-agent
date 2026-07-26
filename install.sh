@@ -36,6 +36,7 @@ log_config() {
 }
 
 # Default values
+agent_repository="${KOMARI_AGENT_REPOSITORY:-cazi-cc/komari-agent}"
 service_name="komari-agent"
 target_dir="/opt/komari"
 github_proxy=""
@@ -307,28 +308,49 @@ case $arch in
 esac
 log_info "Detected OS: ${GREEN}$os_name${NC}, Architecture: ${GREEN}$arch${NC}"
 
-version_to_install="latest"
+if ! printf '%s' "$agent_repository" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+    log_error "Invalid KOMARI_AGENT_REPOSITORY: $agent_repository"
+    exit 1
+fi
+
+file_name="komari-agent-${os_name}-${arch}"
+version_to_install=""
 if [ -n "$install_version" ]; then
     log_info "Attempting to install specified version: ${GREEN}$install_version${NC}"
     version_to_install="$install_version"
 else
-    log_info "No version specified, installing the latest version."
+    log_info "No version specified, resolving the latest compatible agent release."
+    release_api="https://api.github.com/repos/${agent_repository}/releases?per_page=20"
+    if [ -n "$github_proxy" ]; then
+        release_api="${github_proxy}/https://api.github.com/repos/${agent_repository}/releases?per_page=20"
+    fi
+    release_download_url=$(
+        curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            "$release_api" |
+            grep -F "\"browser_download_url\": \"https://github.com/${agent_repository}/releases/download/" |
+            grep -F "/${file_name}\"" |
+            head -n 1 |
+            cut -d '"' -f 4
+    )
+    version_to_install="${release_download_url#*/releases/download/}"
+    version_to_install="${version_to_install%/${file_name}}"
+    if [ -z "$version_to_install" ]; then
+        log_error "No release in ${agent_repository} contains ${file_name}"
+        exit 1
+    fi
+    log_success "Resolved agent release: $version_to_install"
 fi
 
 # Construct download URL
-file_name="komari-agent-${os_name}-${arch}"
-if [ "$version_to_install" = "latest" ]; then
-    download_path="latest/download"
-else
-    download_path="download/${version_to_install}"
-fi
+download_path="download/${version_to_install}"
 
 if [ -n "$github_proxy" ]; then
     # Use proxy for GitHub releases
-    download_url="${github_proxy}/https://github.com/komari-monitor/komari-agent/releases/${download_path}/${file_name}"
+    download_url="${github_proxy}/https://github.com/${agent_repository}/releases/${download_path}/${file_name}"
 else
     # Direct access to GitHub releases
-    download_url="https://github.com/komari-monitor/komari-agent/releases/${download_path}/${file_name}"
+    download_url="https://github.com/${agent_repository}/releases/${download_path}/${file_name}"
 fi
 
 log_step "Creating installation directory: ${GREEN}$target_dir${NC}"
@@ -345,7 +367,7 @@ else
     log_step "Downloading $file_name directly..."
     log_info "URL: ${CYAN}$download_url${NC}"
 fi
-if ! curl -L -o "$komari_agent_path" "$download_url"; then
+if ! curl --fail --show-error --location -o "$komari_agent_path" "$download_url"; then
     log_error "Download failed"
     exit 1
 fi
