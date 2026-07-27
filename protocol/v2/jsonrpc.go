@@ -8,19 +8,21 @@ import (
 )
 
 const (
-	Version                     = "2.0"
-	MethodAgentReport           = "agent.report"
-	MethodAgentBasicInfo        = "agent.basicInfo"
-	MethodAgentPingResult       = "agent.pingResult"
-	MethodAgentTaskResult       = "agent.taskResult"
-	MethodAgentExec             = "agent.exec"
-	MethodAgentPing             = "agent.ping"
-	MethodAgentTCPQuality       = "agent.tcpQuality"
-	MethodAgentTCPQualityResult = "agent.tcpQualityResult"
-	MethodAgentMessage          = "agent.message"
-	MethodAgentEvent            = "agent.event"
-	MethodAgentTerminal         = "agent.terminal.request"
-	MethodAgentPull             = "agent.pull"
+	Version                        = "2.0"
+	MethodAgentReport              = "agent.report"
+	MethodAgentBasicInfo           = "agent.basicInfo"
+	MethodAgentPingResult          = "agent.pingResult"
+	MethodAgentTaskResult          = "agent.taskResult"
+	MethodAgentExec                = "agent.exec"
+	MethodAgentPing                = "agent.ping"
+	MethodAgentTCPQuality          = "agent.tcpQuality"
+	MethodAgentTCPQualityResult    = "agent.tcpQualityResult"
+	MethodAgentUnlockQuality       = "agent.unlockQuality"
+	MethodAgentUnlockQualityResult = "agent.unlockQualityResult"
+	MethodAgentMessage             = "agent.message"
+	MethodAgentEvent               = "agent.event"
+	MethodAgentTerminal            = "agent.terminal.request"
+	MethodAgentPull                = "agent.pull"
 )
 
 type Request struct {
@@ -173,6 +175,64 @@ func BuildTCPQualityResultPayload(params TCPQualityResultParams) interface{} {
 	return Request{
 		JSONRPC: Version,
 		Method:  MethodAgentTCPQualityResult,
+		Params:  params,
+	}
+}
+
+type UnlockQualityParams struct {
+	TaskID          uint   `json:"task_id"`
+	RunID           string `json:"run_id"`
+	Service         string `json:"service"`
+	CatalogRevision string `json:"catalog_revision"`
+	RouteMode       string `json:"route_mode"`
+	ProbeKind       string `json:"probe_kind"`
+	DNSServer       string `json:"dns_server,omitempty"`
+	FixedAddress    string `json:"fixed_address,omitempty"`
+	SampleCount     int    `json:"sample_count"`
+	TimeoutMS       int    `json:"timeout_ms"`
+}
+
+type UnlockQualityEndpointResult struct {
+	EndpointKey           string  `json:"endpoint_key"`
+	SamplesSent           int     `json:"samples_sent"`
+	SamplesReceived       int     `json:"samples_received"`
+	FailureRatio          float64 `json:"failure_ratio"`
+	DNSMS                 float64 `json:"dns_ms,omitempty"`
+	ConnectMS             float64 `json:"connect_ms,omitempty"`
+	TLSMS                 float64 `json:"tls_ms,omitempty"`
+	TTFBP50MS             float64 `json:"ttfb_p50_ms,omitempty"`
+	TTFBP95MS             float64 `json:"ttfb_p95_ms,omitempty"`
+	TotalP50MS            float64 `json:"total_p50_ms,omitempty"`
+	TotalP95MS            float64 `json:"total_p95_ms,omitempty"`
+	JitterMS              float64 `json:"jitter_ms,omitempty"`
+	HTTPStatusCode        int     `json:"http_status_code,omitempty"`
+	HTTPStatusOKRatio     float64 `json:"http_status_ok_ratio,omitempty"`
+	TCPRetransmissions    int     `json:"tcp_retransmissions,omitempty"`
+	ResolvedAddressHash   string  `json:"resolved_address_hash,omitempty"`
+	ResolvedAddressFamily string  `json:"resolved_address_family,omitempty"`
+	ExitCountry           string  `json:"exit_country,omitempty"`
+	EdgeColo              string  `json:"edge_colo,omitempty"`
+	Verdict               string  `json:"verdict,omitempty"`
+	ErrorCode             string  `json:"error_code,omitempty"`
+}
+
+type UnlockQualityResultParams struct {
+	TaskID          uint                          `json:"task_id"`
+	RunID           string                        `json:"run_id"`
+	Service         string                        `json:"service"`
+	CatalogRevision string                        `json:"catalog_revision"`
+	RouteMode       string                        `json:"route_mode"`
+	ProbeKind       string                        `json:"probe_kind"`
+	Verdict         string                        `json:"verdict"`
+	Results         []UnlockQualityEndpointResult `json:"results"`
+	ErrorCode       string                        `json:"error_code,omitempty"`
+	FinishedAt      time.Time                     `json:"finished_at"`
+}
+
+func BuildUnlockQualityResultPayload(params UnlockQualityResultParams) interface{} {
+	return Request{
+		JSONRPC: Version,
+		Method:  MethodAgentUnlockQualityResult,
 		Params:  params,
 	}
 }

@@ -223,7 +223,7 @@ func runV2PullLoop(ctx context.Context, errCh chan<- error) {
 		pullID := fmt.Sprintf("pull-%d", time.Now().UnixNano())
 		ackIDs := snapshotV2AckEventIDs()
 		payload := v2.NewRequest(pullID, v2.MethodAgentPull, map[string]interface{}{
-			"capabilities":  []string{"exec", "ping", "tcp_quality", "message", "event", "terminal"},
+			"capabilities":  []string{"exec", "ping", "tcp_quality", "unlock_quality", "message", "event", "terminal"},
 			"ack_event_ids": ackIDs,
 		})
 		resp, err := postV2RequestContext(ctx, payload)
@@ -447,6 +447,14 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			return true
 		} else {
 			log.Printf("bad v2 TCP quality params: %v", err)
+		}
+	case v2.MethodAgentUnlockQuality:
+		var p v2.UnlockQualityParams
+		if err := v2.BindParams(params, &p); err == nil {
+			go NewUnlockQualityTask(conn, p)
+			return true
+		} else {
+			log.Printf("bad v2 unlock quality params: %v", err)
 		}
 	case v2.MethodAgentTerminal:
 		var p struct {
