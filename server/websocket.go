@@ -29,6 +29,8 @@ var (
 	v2SeenEvents  = make(map[string]struct{})
 )
 
+const v2UpgradeRetryInterval = 2 * time.Minute
+
 func EstablishWebSocketConnection() {
 	var conn *ws.SafeConn
 	defer func() {
@@ -45,6 +47,9 @@ func EstablishWebSocketConnection() {
 
 	heartbeatTicker := time.NewTicker(30 * time.Second)
 	defer heartbeatTicker.Stop()
+
+	v2UpgradeTicker := time.NewTicker(v2UpgradeRetryInterval)
+	defer v2UpgradeTicker.Stop()
 
 	nextProtocol := requestedProtocolVersion()
 	activeProtocol := 0
@@ -73,7 +78,7 @@ func EstablishWebSocketConnection() {
 						go handleWebSocketMessages(conn, activeProtocol, done)
 						break
 					} else if shouldFallbackToV1(connectProtocol, err) {
-						log.Printf("v2 WebSocket endpoint failed (%v), falling back to v1 until this connection is lost", err)
+						log.Printf("v2 WebSocket endpoint failed (%v), temporarily falling back to v1", err)
 						connectProtocol = 1
 						retry = 0
 						continue
@@ -92,7 +97,7 @@ func EstablishWebSocketConnection() {
 					conn, err = runPostFallback(buildWebSocketEndpoint(connectProtocol), interval)
 					if err != nil {
 						if connectProtocol >= 2 && isV2ProtocolFailure(err) {
-							log.Printf("v2 POST fallback failed (%v), falling back to v1 until this connection is lost", err)
+							log.Printf("v2 POST fallback failed (%v), temporarily falling back to v1", err)
 							nextProtocol = 1
 							setConnectionProtocolVersion(1)
 							continue
@@ -139,6 +144,16 @@ func EstablishWebSocketConnection() {
 						nextProtocol = 2
 					}
 				}
+			}
+		case <-v2UpgradeTicker.C:
+			if conn != nil && activeProtocol == 1 && requestedProtocolVersion() >= 2 {
+				log.Println("Retrying v2 WebSocket after temporary v1 fallback")
+				conn.Close()
+				conn = nil
+				readDone = nil
+				activeProtocol = 0
+				resetConnectionProtocolVersion()
+				nextProtocol = 2
 			}
 		case <-readDone:
 			log.Println("WebSocket disconnected")
