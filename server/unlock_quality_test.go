@@ -33,6 +33,41 @@ func TestClassifyChatGPTUnlock(t *testing.T) {
 	}
 }
 
+func TestClassifyChatGPTProtectedResponsesAsAvailable(t *testing.T) {
+	tests := []struct {
+		key    string
+		status int
+		body   string
+	}{
+		{key: "web", status: 403},
+		{key: "auth", status: 403},
+		{key: "api", status: 401},
+		{key: "static", status: 404},
+		{key: "trace", status: 200, body: "loc=SG\ncolo=SIN\n"},
+	}
+	results := make([]v2.UnlockQualityEndpointResult, 0, len(tests))
+	for _, test := range tests {
+		verdict := classifyChatGPTEndpoint(test.key, test.status, test.body)
+		if verdict != "available" {
+			t.Fatalf("%s status %d = %q, want available", test.key, test.status, verdict)
+		}
+		results = append(results, v2.UnlockQualityEndpointResult{
+			EndpointKey: test.key,
+			Verdict:     verdict,
+		})
+	}
+	if got := classifyChatGPTUnlock(results, "verify"); got != "available" {
+		t.Fatalf("protected response verdict = %q, want available", got)
+	}
+}
+
+func TestClassifyChatGPTRegionMarkerWinsOverHTTPStatus(t *testing.T) {
+	body := `{"error":{"code":"unsupported_country"}}`
+	if got := classifyChatGPTEndpoint("api", 403, body); got != "region_limited" {
+		t.Fatalf("region marker verdict = %q, want region_limited", got)
+	}
+}
+
 func TestValidateUnlockQualityParams(t *testing.T) {
 	base := v2.UnlockQualityParams{
 		TaskID: 1, RunID: "run_1", Service: "chatgpt", CatalogRevision: "chatgpt_v1",

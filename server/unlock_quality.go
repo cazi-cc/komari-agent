@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	unlockQualityBodyLimit = 64 << 10
+	unlockQualityBodyLimit  = 64 << 10
 	unlockQualityMaxSamples = 3
 )
 
@@ -392,15 +392,18 @@ func classifyChatGPTEndpoint(key string, status int, body string) string {
 	}
 	switch key {
 	case "api":
-		if status == http.StatusUnauthorized || status == http.StatusOK {
+		if status == http.StatusOK || status == http.StatusUnauthorized ||
+			status == http.StatusForbidden || status == http.StatusTooManyRequests {
 			return "available"
 		}
 	case "trace":
 		if status == http.StatusOK && strings.Contains(lower, "colo=") {
 			return "available"
 		}
-	default:
-		if status >= 200 && status < 400 {
+	case "web", "auth", "static":
+		// ChatGPT and its CDN commonly return 403/404 to non-browser probes.
+		// A completed non-5xx HTTPS response still proves regional reachability.
+		if status >= 200 && status < 500 {
 			return "available"
 		}
 	}
