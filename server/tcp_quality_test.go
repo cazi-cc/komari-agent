@@ -2,6 +2,7 @@ package server
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
@@ -75,5 +76,46 @@ func TestFloatQuantile(t *testing.T) {
 	}
 	if got := floatQuantile(values, 0.95); got != 38.5 {
 		t.Fatalf("P95 = %v, want 38.5", got)
+	}
+}
+
+func TestBuildNpingBatchArgsUsesExplicitIPv6Route(t *testing.T) {
+	target := v2.TCPQualityTarget{
+		Address: "2001:db8::20", Port: 80, IPVersion: 6,
+	}
+	route := &npingIPv6Route{
+		Interface:      "eth0",
+		SourceIP:       "2001:db8::10",
+		SourceMAC:      "00:11:22:33:44:55",
+		DestinationMAC: "66:77:88:99:aa:bb",
+	}
+	args := buildNpingBatchArgs(target, 0, 30, 200, route)
+	for _, expected := range []string{
+		"-6", "-e", "eth0", "-S", "2001:db8::10",
+		"--source-mac", "00:11:22:33:44:55",
+		"--dest-mac", "66:77:88:99:aa:bb",
+	} {
+		if !slices.Contains(args, expected) {
+			t.Fatalf("args = %#v, missing %q", args, expected)
+		}
+	}
+	if slices.Contains(args, "--privileged") {
+		t.Fatalf("explicit L2 args must not include --privileged: %#v", args)
+	}
+}
+
+func TestParseNpingIPv6Route(t *testing.T) {
+	interfaceName, sourceIP, nextHop := parseNpingIPv6Route(
+		"240e:d6::92 from :: via 2001:db8::1 dev eth0 src 2001:db8:1::10 metric 1024 pref medium",
+	)
+	if interfaceName != "eth0" || sourceIP != "2001:db8:1::10" || nextHop != "2001:db8::1" {
+		t.Fatalf("route = %q %q %q", interfaceName, sourceIP, nextHop)
+	}
+}
+
+func TestParseNpingIPv6Neighbor(t *testing.T) {
+	output := "2001:db8::1 lladdr 66:77:88:99:AA:BB router REACHABLE"
+	if got := parseNpingIPv6Neighbor(output); got != "66:77:88:99:aa:bb" {
+		t.Fatalf("neighbor MAC = %q", got)
 	}
 }
