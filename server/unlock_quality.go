@@ -83,18 +83,20 @@ func NewUnlockQualityTask(conn *ws.SafeConn, params v2.UnlockQualityParams) {
 	}
 	defer unlockQualityRunning.Delete(taskKey)
 
-	results, verdict, errorCode := performUnlockQualityTask(params)
-	uploadUnlockQualityResult(conn, v2.UnlockQualityResultParams{
-		TaskID:          params.TaskID,
-		RunID:           params.RunID,
-		Service:         params.Service,
-		CatalogRevision: params.CatalogRevision,
-		RouteMode:       params.RouteMode,
-		ProbeKind:       params.ProbeKind,
-		Verdict:         verdict,
-		Results:         results,
-		ErrorCode:       errorCode,
-		FinishedAt:      time.Now().UTC(),
+	heavyProbeGate.run(fmt.Sprintf("unlock-quality:%d:%s", params.TaskID, params.RouteMode), func() {
+		results, verdict, errorCode := performUnlockQualityTask(params)
+		uploadUnlockQualityResult(conn, v2.UnlockQualityResultParams{
+			TaskID:          params.TaskID,
+			RunID:           params.RunID,
+			Service:         params.Service,
+			CatalogRevision: params.CatalogRevision,
+			RouteMode:       params.RouteMode,
+			ProbeKind:       params.ProbeKind,
+			Verdict:         verdict,
+			Results:         results,
+			ErrorCode:       errorCode,
+			FinishedAt:      time.Now().UTC(),
+		})
 	})
 }
 

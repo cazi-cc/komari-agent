@@ -57,14 +57,16 @@ func NewTCPQualityTask(conn *ws.SafeConn, params v2.TCPQualityParams) {
 	}
 	defer tcpQualityRunning.Delete(taskKey)
 
-	results, errorCode := performTCPQualityTask(params)
-	uploadTCPQualityResult(conn, v2.TCPQualityResultParams{
-		TaskID:          params.TaskID,
-		RunID:           params.RunID,
-		CatalogRevision: params.CatalogRevision,
-		Results:         results,
-		ErrorCode:       errorCode,
-		FinishedAt:      time.Now().UTC(),
+	heavyProbeGate.run(fmt.Sprintf("tcp-quality:%d", params.TaskID), func() {
+		results, errorCode := performTCPQualityTask(params)
+		uploadTCPQualityResult(conn, v2.TCPQualityResultParams{
+			TaskID:          params.TaskID,
+			RunID:           params.RunID,
+			CatalogRevision: params.CatalogRevision,
+			Results:         results,
+			ErrorCode:       errorCode,
+			FinishedAt:      time.Now().UTC(),
+		})
 	})
 }
 

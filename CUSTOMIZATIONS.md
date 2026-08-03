@@ -8,6 +8,8 @@ This fork keeps the upstream Komari agent protocol compatible while adding:
 - DNS, connect, TLS, TTFB, loss, jitter and min/max/average timing details;
 - connection-level Linux TCP retransmission counts through `TCP_INFO`;
 - privacy-safe resolved-address fingerprints instead of uploading raw target IPs;
+- separate concurrency gates for latency probes (maximum two) and heavier TCP
+  quality/unlock probes (maximum one), protecting monitored workloads from bursts;
 - self-updates from `cazi-cc/komari-agent`;
 - Linux/macOS and Windows installers that resolve releases and binaries only
   from `cazi-cc/komari-agent` by default, including snapshot prereleases.

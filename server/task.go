@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -273,6 +274,12 @@ func httpPing(target string, timeout time.Duration) (int64, error) {
 }
 
 func NewPingTask(conn *ws.SafeConn, protocolVersion int, taskID uint, pingType, pingTarget string, options v2.ProbeOptions) {
+	lightProbeGate.run(fmt.Sprintf("ping:%d", taskID), func() {
+		runPingTask(conn, protocolVersion, taskID, pingType, pingTarget, options)
+	})
+}
+
+func runPingTask(conn *ws.SafeConn, protocolVersion int, taskID uint, pingType, pingTarget string, options v2.ProbeOptions) {
 	if taskID == 0 {
 		log.Printf("Invalid task ID: %d", taskID)
 		return
