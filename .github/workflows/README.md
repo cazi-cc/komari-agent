@@ -14,6 +14,7 @@ The important design split is:
 
 | Workflow | Trigger | Main output | Prerelease handling |
 | --- | --- | --- | --- |
+| `test-installer.yml` | Installer-related push/PR, manual dispatch | Shell syntax and Alpine 3.21 dependency validation | Not a release workflow |
 | `build.yml` | Push to `main` | CI build artifacts for the pushed commit | Not a release workflow |
 | `snapshot.yml` | Push to `main`, manual dispatch | One snapshot prerelease plus `ghcr.io/...:snapshot` | Creates prereleases only |
 | `release.yml` | Published GitHub release | Release binary assets | Skips prereleases |

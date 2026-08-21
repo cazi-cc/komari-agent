@@ -1,0 +1,36 @@
+name: Test Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "install.sh"
+      - "tests/install_script_test.sh"
+      - ".github/workflows/test-installer.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "install.sh"
+      - "tests/install_script_test.sh"
+      - ".github/workflows/test-installer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate installer syntax and package mapping
+        run: bash tests/install_script_test.sh
+
+      - name: Verify nping on Alpine 3.21
+        run: >-
+          docker run --rm
+          alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+          sh -ec 'apk add --no-cache nmap-nping && command -v nping && nping --version'

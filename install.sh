@@ -250,8 +250,9 @@ install_dependencies() {
             [ "$need_nping" -eq 0 ] || yum install -y nmap
         elif command -v apk >/dev/null 2>&1; then
             log_info "Using apk to install dependencies..."
-            [ -z "$missing_deps" ] || apk add $missing_deps
-            [ "$need_nping" -eq 0 ] || apk add nmap
+            [ -z "$missing_deps" ] || apk add --no-cache $missing_deps
+            # Alpine splits nping out of the main nmap package.
+            [ "$need_nping" -eq 0 ] || apk add --no-cache nmap-nping
         elif command -v brew >/dev/null 2>&1; then
             log_info "Using Homebrew to install dependencies..."
             [ -z "$missing_deps" ] || brew install $missing_deps
@@ -269,7 +270,7 @@ install_dependencies() {
             fi
         done
         if ! command -v nping >/dev/null 2>&1; then
-            log_error "Failed to install nping (usually provided by the nmap package)"
+            log_error "Failed to install nping (Alpine: nmap-nping; other supported systems: nmap)"
             exit 1
         fi
         log_success "Dependencies installed successfully"

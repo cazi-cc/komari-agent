@@ -10,6 +10,8 @@ This fork keeps the upstream Komari agent protocol compatible while adding:
 - privacy-safe resolved-address fingerprints instead of uploading raw target IPs;
 - separate concurrency gates for latency probes (maximum two) and heavier TCP
   quality/unlock probes (maximum one), protecting monitored workloads from bursts;
+- installer dependency mapping that uses Alpine's split `nmap-nping` package
+  instead of incorrectly assuming the main `nmap` package contains `nping`;
 - self-updates from `cazi-cc/komari-agent`;
 - Linux/macOS and Windows installers that resolve releases and binaries only
   from `cazi-cc/komari-agent` by default, including snapshot prereleases.

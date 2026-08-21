@@ -75,6 +75,16 @@ jobs:
               echo "$conflict_files"
               echo '```'
               echo
+              echo "## Fork-owned files to preserve"
+              echo
+              echo '```text'
+              echo 'install.sh'
+              echo 'tests/install_script_test.sh'
+              echo '.github/workflows/test-installer.yml'
+              echo '.github/workflows/sync-upstream.yml'
+              echo 'CUSTOMIZATIONS.md'
+              echo '```'
+              echo
               echo "Do not merge this report-only commit. Resolve the upstream merge on this branch, delete this file, run the repository tests, and then update the pull request."
             } > .github/UPSTREAM_SYNC_CONFLICTS.md
             git add .github/UPSTREAM_SYNC_CONFLICTS.md
@@ -98,21 +108,71 @@ jobs:
             exit 0
           fi
 
+          protected_changes="$(git diff --name-only "origin/${BASE_BRANCH}..HEAD" -- \
+            install.sh \
+            tests/install_script_test.sh \
+            .github/workflows/test-installer.yml \
+            .github/workflows/sync-upstream.yml \
+            CUSTOMIZATIONS.md)"
+          bash tests/install_script_test.sh
           go test ./...
           git push --force-with-lease origin "${SYNC_BRANCH}"
           {
             echo "needed=true"
             echo "ready=true"
             echo "conflict=false"
+            echo "protected_changes<<EOF"
+            echo "$protected_changes"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+          if [ -n "$protected_changes" ]; then
+            {
+              echo "## Fork-owned installer files changed"
+              echo
+              echo '```text'
+              echo "$protected_changes"
+              echo '```'
+              echo
+              echo "Review these files manually and require the Test Installer check before merging."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create or update the review pull request
         if: steps.sync.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          PROTECTED_CHANGES: ${{ steps.sync.outputs.protected_changes }}
         run: |
           set -euo pipefail
-          body="Automated upstream merge. Review probe protocol compatibility and fork updater settings before merging."
+          body="$(cat <<'EOF'
+          Automated upstream merge. Review probe protocol compatibility, fork updater settings and installer dependency mappings before merging.
+
+          Required checks:
+          - Run the complete Go test suite.
+          - Run the Test Installer workflow.
+          - Preserve every fork-owned file listed below.
+
+          Fork-owned files to preserve:
+
+          ```text
+          install.sh
+          tests/install_script_test.sh
+          .github/workflows/test-installer.yml
+          .github/workflows/sync-upstream.yml
+          CUSTOMIZATIONS.md
+          ```
+          EOF
+          )"
+          if [ -n "${PROTECTED_CHANGES}" ]; then
+            body="${body}
+
+          Fork-owned files changed by this sync:
+
+          \`\`\`text
+          ${PROTECTED_CHANGES}
+          \`\`\`"
+          fi
           if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
             gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "${PR_TITLE}" --body "$body"
           else
@@ -126,7 +186,7 @@ jobs:
         run: |
           set -euo pipefail
           title="chore: resolve komari-monitor/komari-agent upstream conflicts"
-          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, delete the report, run all tests, and then update this pull request."
+          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge, review every fork-owned file listed in the report, delete the report, run all tests, and then update this pull request."
           if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
             gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
           else
