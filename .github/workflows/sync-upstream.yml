@@ -82,6 +82,9 @@ jobs:
               echo 'tests/install_script_test.sh'
               echo '.github/workflows/test-installer.yml'
               echo '.github/workflows/sync-upstream.yml'
+              echo 'protocol/v2/jsonrpc.go'
+              echo 'server/unlock_quality.go'
+              echo 'server/unlock_quality_test.go'
               echo 'CUSTOMIZATIONS.md'
               echo '```'
               echo
@@ -113,6 +116,9 @@ jobs:
             tests/install_script_test.sh \
             .github/workflows/test-installer.yml \
             .github/workflows/sync-upstream.yml \
+            protocol/v2/jsonrpc.go \
+            server/unlock_quality.go \
+            server/unlock_quality_test.go \
             CUSTOMIZATIONS.md)"
           bash tests/install_script_test.sh
           go test ./...
@@ -160,6 +166,9 @@ jobs:
           tests/install_script_test.sh
           .github/workflows/test-installer.yml
           .github/workflows/sync-upstream.yml
+          protocol/v2/jsonrpc.go
+          server/unlock_quality.go
+          server/unlock_quality_test.go
           CUSTOMIZATIONS.md
           ```
           EOF

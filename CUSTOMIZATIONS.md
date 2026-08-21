@@ -8,6 +8,8 @@ This fork keeps the upstream Komari agent protocol compatible while adding:
 - DNS, connect, TLS, TTFB, loss, jitter and min/max/average timing details;
 - connection-level Linux TCP retransmission counts through `TCP_INFO`;
 - privacy-safe resolved-address fingerprints instead of uploading raw target IPs;
+- ChatGPT relay-quality probes through administrator-selected HTTP, HTTPS or
+  SOCKS5 proxies, with proxy URLs kept out of results and logs;
 - separate concurrency gates for latency probes (maximum two) and heavier TCP
   quality/unlock probes (maximum one), protecting monitored workloads from bursts;
 - installer dependency mapping that uses Alpine's split `nmap-nping` package
