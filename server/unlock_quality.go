@@ -18,7 +18,6 @@ import (
 
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
 	"github.com/komari-monitor/komari-agent/ws"
-	"golang.org/x/net/proxy"
 )
 
 const (
@@ -109,7 +108,7 @@ func validateUnlockQualityParams(params v2.UnlockQualityParams) error {
 	if params.Service != "chatgpt" {
 		return errors.New("unsupported unlock service")
 	}
-	if params.RouteMode != "system" && params.RouteMode != "control" && params.RouteMode != "fixed" && params.RouteMode != "relay" {
+	if params.RouteMode != "system" && params.RouteMode != "control" && params.RouteMode != "fixed" {
 		return errors.New("invalid unlock route mode")
 	}
 	if params.ProbeKind != "minute" && params.ProbeKind != "verify" {
@@ -121,20 +120,16 @@ func validateUnlockQualityParams(params v2.UnlockQualityParams) error {
 	}
 	switch params.RouteMode {
 	case "system":
-		if strings.TrimSpace(params.DNSServer) != "" || strings.TrimSpace(params.FixedAddress) != "" || strings.TrimSpace(params.ProxyURL) != "" {
+		if strings.TrimSpace(params.DNSServer) != "" || strings.TrimSpace(params.FixedAddress) != "" {
 			return errors.New("system route must not override DNS or address")
 		}
 	case "control":
-		if normalizeTaskDNSServer(params.DNSServer) == "" || strings.TrimSpace(params.FixedAddress) != "" || strings.TrimSpace(params.ProxyURL) != "" {
+		if normalizeTaskDNSServer(params.DNSServer) == "" || strings.TrimSpace(params.FixedAddress) != "" {
 			return errors.New("control route requires a valid DNS server")
 		}
 	case "fixed":
-		if net.ParseIP(strings.TrimSpace(params.FixedAddress)) == nil || strings.TrimSpace(params.DNSServer) != "" || strings.TrimSpace(params.ProxyURL) != "" {
+		if net.ParseIP(strings.TrimSpace(params.FixedAddress)) == nil || strings.TrimSpace(params.DNSServer) != "" {
 			return errors.New("fixed route requires an IP address")
-		}
-	case "relay":
-		if strings.TrimSpace(params.DNSServer) != "" || strings.TrimSpace(params.FixedAddress) != "" || !validUnlockProxyURL(params.ProxyURL) {
-			return errors.New("relay route requires a valid HTTP, HTTPS or SOCKS5 proxy URL")
 		}
 	}
 	return nil
@@ -241,13 +236,7 @@ func performUnlockHTTPSample(params v2.UnlockQualityParams, target string) (unlo
 		DisableKeepAlives:   true,
 		ForceAttemptHTTP2:   true,
 		TLSHandshakeTimeout: timeout,
-	}
-	if params.RouteMode == "relay" {
-		if err := configureUnlockRelayTransport(transport, params.ProxyURL, timeout); err != nil {
-			return unlockHTTPSample{}, err
-		}
-	} else {
-		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, port, splitErr := net.SplitHostPort(address)
 			if splitErr != nil {
 				return nil, splitErr
@@ -282,7 +271,7 @@ func performUnlockHTTPSample(params v2.UnlockQualityParams, target string) (unlo
 				lastErr = dialErr
 			}
 			return nil, lastErr
-		}
+		},
 	}
 	defer transport.CloseIdleConnections()
 
@@ -378,55 +367,6 @@ func performUnlockHTTPSample(params v2.UnlockQualityParams, target string) (unlo
 		addressFamily:   traceState.addressFamily,
 		body:            string(body),
 	}, nil
-}
-
-func validUnlockProxyURL(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Hostname() == "" || parsed.Port() == "" || parsed.Fragment != "" || parsed.RawQuery != "" {
-		return false
-	}
-	if parsed.Path != "" && parsed.Path != "/" {
-		return false
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "http", "https", "socks5", "socks5h":
-		return true
-	default:
-		return false
-	}
-}
-
-func configureUnlockRelayTransport(transport *http.Transport, raw string, timeout time.Duration) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || !validUnlockProxyURL(raw) {
-		return errors.New("invalid unlock relay proxy URL")
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "http", "https":
-		transport.Proxy = http.ProxyURL(parsed)
-		transport.DialContext = (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext
-		return nil
-	case "socks5", "socks5h":
-		var auth *proxy.Auth
-		if parsed.User != nil {
-			password, _ := parsed.User.Password()
-			auth = &proxy.Auth{User: parsed.User.Username(), Password: password}
-		}
-		dialer, dialErr := proxy.SOCKS5("tcp", parsed.Host, auth, &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second})
-		if dialErr != nil {
-			return dialErr
-		}
-		if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
-			transport.DialContext = contextDialer.DialContext
-		} else {
-			transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
-				return dialer.Dial(network, address)
-			}
-		}
-		return nil
-	default:
-		return errors.New("unsupported unlock relay proxy scheme")
-	}
 }
 
 func allowedUnlockHost(host string) bool {

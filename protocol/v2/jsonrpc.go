@@ -188,7 +188,6 @@ type UnlockQualityParams struct {
 	ProbeKind       string `json:"probe_kind"`
 	DNSServer       string `json:"dns_server,omitempty"`
 	FixedAddress    string `json:"fixed_address,omitempty"`
-	ProxyURL        string `json:"proxy_url,omitempty"`
 	SampleCount     int    `json:"sample_count"`
 	TimeoutMS       int    `json:"timeout_ms"`
 }

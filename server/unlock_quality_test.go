@@ -88,24 +88,3 @@ func TestValidateUnlockQualityParams(t *testing.T) {
 		t.Fatalf("valid fixed params rejected: %v", err)
 	}
 }
-
-func TestValidateUnlockQualityRelayParams(t *testing.T) {
-	base := v2.UnlockQualityParams{
-		TaskID: 1, RunID: "run_1", Service: "chatgpt", CatalogRevision: "chatgpt_v1",
-		RouteMode: "relay", ProbeKind: "minute", ProxyURL: "socks5://127.0.0.1:1080",
-		SampleCount: 1, TimeoutMS: 10000,
-	}
-	if err := validateUnlockQualityParams(base); err != nil {
-		t.Fatalf("expected SOCKS5 relay to be valid: %v", err)
-	}
-	base.ProxyURL = "http://user:secret@127.0.0.1:7890"
-	if err := validateUnlockQualityParams(base); err != nil {
-		t.Fatalf("expected authenticated HTTP relay to be valid: %v", err)
-	}
-	for _, invalid := range []string{"", "ftp://127.0.0.1:21", "socks5://127.0.0.1", "http://127.0.0.1:7890/path"} {
-		base.ProxyURL = invalid
-		if err := validateUnlockQualityParams(base); err == nil {
-			t.Fatalf("expected proxy URL %q to be rejected", invalid)
-		}
-	}
-}
