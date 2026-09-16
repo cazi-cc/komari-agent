@@ -126,6 +126,7 @@ type PingParams struct {
 
 type TCPQualityTarget struct {
 	Key          string `json:"key"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
 	Address      string `json:"address"`
 	Port         int    `json:"port"`
 	Province     string `json:"province"`
@@ -136,30 +137,40 @@ type TCPQualityTarget struct {
 }
 
 type TCPQualityParams struct {
-	TaskID          uint               `json:"task_id"`
-	RunID           string             `json:"run_id"`
-	CatalogRevision string             `json:"catalog_revision"`
-	Targets         []TCPQualityTarget `json:"targets"`
-	StandardPackets int                `json:"standard_packets"`
-	LargeEnabled    bool               `json:"large_enabled"`
-	LargePackets    int                `json:"large_packets"`
-	DelayMS         int                `json:"delay_ms"`
-	TimeoutMS       int                `json:"timeout_ms"`
-	MaxParallel     int                `json:"max_parallel"`
+	TaskID                     uint               `json:"task_id"`
+	RunID                      string             `json:"run_id"`
+	CatalogRevision            string             `json:"catalog_revision"`
+	Targets                    []TCPQualityTarget `json:"targets"`
+	StandardPackets            int                `json:"standard_packets"`
+	LargeEnabled               bool               `json:"large_enabled"`
+	LargePackets               int                `json:"large_packets"`
+	ExperimentalEnabled        bool               `json:"experimental_enabled,omitempty"`
+	ExperimentalDue            bool               `json:"experimental_due,omitempty"`
+	ExperimentalPackets        int                `json:"experimental_packets,omitempty"`
+	ExperimentalControlPackets int                `json:"experimental_control_packets,omitempty"`
+	DelayMS                    int                `json:"delay_ms"`
+	TimeoutMS                  int                `json:"timeout_ms"`
+	MaxParallel                int                `json:"max_parallel"`
 }
 
 type TCPQualityTargetResult struct {
-	TargetKey        string  `json:"target_key"`
-	Mode             string  `json:"mode"`
-	SamplesSent      int     `json:"samples_sent"`
-	SamplesReceived  int     `json:"samples_received"`
-	LossRatio        float64 `json:"loss_ratio"`
-	MinLatencyMS     float64 `json:"min_latency_ms,omitempty"`
-	MaxLatencyMS     float64 `json:"max_latency_ms,omitempty"`
-	P50LatencyMS     float64 `json:"p50_latency_ms,omitempty"`
-	P95LatencyMS     float64 `json:"p95_latency_ms,omitempty"`
-	AverageLatencyMS float64 `json:"average_latency_ms,omitempty"`
-	ErrorCode        string  `json:"error_code,omitempty"`
+	TargetKey              string  `json:"target_key"`
+	TargetFingerprint      string  `json:"target_fingerprint,omitempty"`
+	Mode                   string  `json:"mode"`
+	PayloadBytes           int     `json:"payload_bytes,omitempty"`
+	SamplesSent            int     `json:"samples_sent"`
+	SamplesReceived        int     `json:"samples_received"`
+	LossRatio              float64 `json:"loss_ratio"`
+	MinLatencyMS           float64 `json:"min_latency_ms,omitempty"`
+	MaxLatencyMS           float64 `json:"max_latency_ms,omitempty"`
+	P50LatencyMS           float64 `json:"p50_latency_ms,omitempty"`
+	P95LatencyMS           float64 `json:"p95_latency_ms,omitempty"`
+	AverageLatencyMS       float64 `json:"average_latency_ms,omitempty"`
+	ControlSamplesSent     int     `json:"control_samples_sent,omitempty"`
+	ControlSamplesReceived int     `json:"control_samples_received,omitempty"`
+	ControlLossRatio       float64 `json:"control_loss_ratio,omitempty"`
+	EnvironmentLimited     bool    `json:"environment_limited,omitempty"`
+	ErrorCode              string  `json:"error_code,omitempty"`
 }
 
 type TCPQualityResultParams struct {

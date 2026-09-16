@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -78,16 +80,25 @@ func validateTCPQualityParams(params v2.TCPQualityParams) error {
 		return errors.New("invalid TCP quality target count")
 	}
 	if params.StandardPackets < 10 || params.StandardPackets > 200 ||
-		params.LargePackets < 10 || params.LargePackets > 100 ||
 		params.DelayMS < 50 || params.DelayMS > 5000 ||
 		params.TimeoutMS < 500 || params.TimeoutMS > 15000 {
 		return errors.New("invalid TCP quality probe limits")
+	}
+	if params.LargeEnabled && (params.LargePackets < 10 || params.LargePackets > 100) {
+		return errors.New("invalid legacy TCP quality payload probe limits")
+	}
+	if params.ExperimentalEnabled && (params.ExperimentalPackets < 10 || params.ExperimentalPackets > 100 ||
+		params.ExperimentalControlPackets < 3 || params.ExperimentalControlPackets > 20) {
+		return errors.New("invalid experimental TCP quality probe limits")
 	}
 	seen := make(map[string]struct{}, len(params.Targets))
 	for _, target := range params.Targets {
 		ip := net.ParseIP(strings.TrimSpace(target.Address))
 		if !validTCPQualityID(target.Key, 64) || ip == nil || target.Port < 1 || target.Port > 65535 {
 			return errors.New("invalid TCP quality target")
+		}
+		if target.Fingerprint != "" && !validTCPQualityID(target.Fingerprint, 64) {
+			return errors.New("invalid TCP quality target fingerprint")
 		}
 		version := 6
 		if ip.To4() != nil {
@@ -133,6 +144,9 @@ func performTCPQualityTask(params v2.TCPQualityParams) ([]v2.TCPQualityTargetRes
 	if parallel > maxTCPQualityParallel {
 		parallel = maxTCPQualityParallel
 	}
+	if params.ExperimentalEnabled && params.ExperimentalDue {
+		parallel = 1
+	}
 	type indexedResults struct {
 		index   int
 		results []v2.TCPQualityTargetResult
@@ -154,6 +168,10 @@ func performTCPQualityTask(params v2.TCPQualityParams) ([]v2.TCPQualityTargetRes
 				targetResults = append(targetResults,
 					runTCPQualityMode(npingPath, target, "large", params.LargePackets, params.DelayMS, params.TimeoutMS))
 			}
+			if params.ExperimentalEnabled && params.ExperimentalDue {
+				targetResults = append(targetResults, runTCPQualityExperimentalModes(npingPath, target, params.ExperimentalPackets,
+					params.ExperimentalControlPackets, params.DelayMS, params.TimeoutMS)...)
+			}
 			output <- indexedResults{index: index, results: targetResults}
 		}()
 	}
@@ -163,7 +181,7 @@ func performTCPQualityTask(params v2.TCPQualityParams) ([]v2.TCPQualityTargetRes
 	for item := range output {
 		ordered[item.index] = item.results
 	}
-	results := make([]v2.TCPQualityTargetResult, 0, len(params.Targets)*2)
+	results := make([]v2.TCPQualityTargetResult, 0, len(params.Targets)*4)
 	for _, group := range ordered {
 		results = append(results, group...)
 	}
@@ -171,21 +189,199 @@ func performTCPQualityTask(params v2.TCPQualityParams) ([]v2.TCPQualityTargetRes
 }
 
 func unavailableTCPQualityResults(params v2.TCPQualityParams, code string) []v2.TCPQualityTargetResult {
-	results := make([]v2.TCPQualityTargetResult, 0, len(params.Targets)*2)
+	results := make([]v2.TCPQualityTargetResult, 0, len(params.Targets)*4)
 	for _, target := range params.Targets {
-		results = append(results, v2.TCPQualityTargetResult{TargetKey: target.Key, Mode: "standard", ErrorCode: code})
+		results = append(results, v2.TCPQualityTargetResult{TargetKey: target.Key, TargetFingerprint: target.Fingerprint, Mode: "standard", ErrorCode: code})
 		if params.LargeEnabled {
-			results = append(results, v2.TCPQualityTargetResult{TargetKey: target.Key, Mode: "large", ErrorCode: code})
+			results = append(results, v2.TCPQualityTargetResult{TargetKey: target.Key, TargetFingerprint: target.Fingerprint, Mode: "large", ErrorCode: code})
+		}
+		if params.ExperimentalEnabled && params.ExperimentalDue {
+			for _, mode := range []struct {
+				name    string
+				payload int
+			}{{"experimental_standard", 0}, {"payload_300", 300}, {"payload_1050", 1050}} {
+				results = append(results, v2.TCPQualityTargetResult{TargetKey: target.Key, TargetFingerprint: target.Fingerprint,
+					Mode: mode.name, PayloadBytes: mode.payload, ErrorCode: code})
+			}
 		}
 	}
 	return results
 }
 
+func runTCPQualityExperimentalModes(npingPath string, target v2.TCPQualityTarget, count, controlCount, delayMS, timeoutMS int) []v2.TCPQualityTargetResult {
+	type modeSpec struct {
+		name    string
+		payload int
+	}
+	modes := []modeSpec{{"experimental_standard", 0}, {"payload_300", 300}, {"payload_1050", 1050}}
+	controlTarget, controlErr := resolveTCPQualityControlTarget(target.IPVersion)
+	controlLatencies := []float64(nil)
+	controlCode := ""
+	if controlErr == nil {
+		controlLatencies, controlCode = runTCPQualityIndependentSeries(npingPath, controlTarget, 1050, controlCount, delayMS, timeoutMS)
+	} else {
+		controlCode = "control_dns_error"
+	}
+	controlReceived := len(controlLatencies)
+	controlLoss := 1.0
+	if controlCount > 0 {
+		controlLoss = float64(controlCount-controlReceived) / float64(controlCount)
+	}
+	environmentLimited := controlCode != "" && controlReceived == 0 || controlLoss >= 0.80
+	if environmentLimited {
+		results := make([]v2.TCPQualityTargetResult, 0, len(modes))
+		for _, mode := range modes {
+			results = append(results, v2.TCPQualityTargetResult{
+				TargetKey: target.Key, TargetFingerprint: target.Fingerprint, Mode: mode.name, PayloadBytes: mode.payload,
+				ControlSamplesSent: controlCount, ControlSamplesReceived: controlReceived, ControlLossRatio: controlLoss,
+				EnvironmentLimited: true, ErrorCode: "environment_limited",
+			})
+		}
+		return results
+	}
+
+	latencies := make(map[string][]float64, len(modes))
+	lastErrors := make(map[string]string, len(modes))
+	var route *npingIPv6Route
+	if target.IPVersion == 6 {
+		route, _ = discoverNpingIPv6Route(target.Address)
+	}
+	for sample := 0; sample < count; sample++ {
+		for offset := 0; offset < len(modes); offset++ {
+			mode := modes[(sample+offset)%len(modes)]
+			value, code := runNpingIndependentSample(npingPath, target, mode.payload, timeoutMS, route)
+			if value >= 0 {
+				latencies[mode.name] = append(latencies[mode.name], value)
+			}
+			if code != "" {
+				lastErrors[mode.name] = code
+			}
+			if delayMS > 0 {
+				time.Sleep(time.Duration(delayMS) * time.Millisecond)
+			}
+		}
+	}
+	results := make([]v2.TCPQualityTargetResult, 0, len(modes))
+	for _, mode := range modes {
+		result := buildTCPQualityResult(target, mode.name, mode.payload, count, latencies[mode.name], lastErrors[mode.name])
+		result.ControlSamplesSent = controlCount
+		result.ControlSamplesReceived = controlReceived
+		result.ControlLossRatio = controlLoss
+		results = append(results, result)
+	}
+	return results
+}
+
+func resolveTCPQualityControlTarget(ipVersion int) (v2.TCPQualityTarget, error) {
+	network := "ip4"
+	if ipVersion == 6 {
+		network = "ip6"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIP(ctx, network, "www.cloudflare.com")
+	if err != nil || len(addresses) == 0 {
+		return v2.TCPQualityTarget{}, errors.New("control target is unavailable")
+	}
+	for _, address := range addresses {
+		if address == nil || (ipVersion == 4 && address.To4() == nil) || (ipVersion == 6 && address.To4() != nil) {
+			continue
+		}
+		return v2.TCPQualityTarget{Key: "control", Address: address.String(), Port: 443, IPVersion: ipVersion}, nil
+	}
+	return v2.TCPQualityTarget{}, errors.New("control target family is unavailable")
+}
+
+func runTCPQualityIndependentSeries(npingPath string, target v2.TCPQualityTarget, payloadSize, count, delayMS, timeoutMS int) ([]float64, string) {
+	latencies := make([]float64, 0, count)
+	lastError := ""
+	var route *npingIPv6Route
+	if target.IPVersion == 6 {
+		route, _ = discoverNpingIPv6Route(target.Address)
+	}
+	for sample := 0; sample < count; sample++ {
+		value, code := runNpingIndependentSample(npingPath, target, payloadSize, timeoutMS, route)
+		if value >= 0 {
+			latencies = append(latencies, value)
+		}
+		if code != "" {
+			lastError = code
+		}
+		if delayMS > 0 && sample+1 < count {
+			time.Sleep(time.Duration(delayMS) * time.Millisecond)
+		}
+	}
+	return latencies, lastError
+}
+
+func runNpingIndependentSample(npingPath string, target v2.TCPQualityTarget, payloadSize, timeoutMS int, route *npingIPv6Route) (float64, string) {
+	sourcePort, sequence := randomTCPQualityTuple()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond+5*time.Second)
+	defer cancel()
+	args := buildNpingBatchArgs(target, payloadSize, 1, 0, route)
+	last := len(args) - 1
+	args = append(args[:last], append([]string{"-g", strconv.Itoa(sourcePort), "--seq", strconv.FormatUint(uint64(sequence), 10)}, args[last:]...)...)
+	output, err := exec.CommandContext(ctx, npingPath, args...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return -1, "timeout"
+	}
+	latencies, received := parseNpingBatchOutput(string(output))
+	if received == 0 || len(latencies) == 0 {
+		if err != nil {
+			return -1, "nping_error"
+		}
+		return -1, "no_response"
+	}
+	return latencies[0], ""
+}
+
+func randomTCPQualityTuple() (int, uint32) {
+	var raw [6]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		now := uint64(time.Now().UnixNano())
+		return 20000 + int(now%40000), uint32(now >> 16)
+	}
+	sequence := binary.BigEndian.Uint32(raw[2:]) & 0x7ffffffe
+	if sequence == 0 {
+		sequence = 1
+	}
+	return 20000 + int(binary.BigEndian.Uint16(raw[:2]))%40000, sequence
+}
+
+func buildTCPQualityResult(target v2.TCPQualityTarget, mode string, payloadBytes, count int, latencies []float64, lastError string) v2.TCPQualityTargetResult {
+	result := v2.TCPQualityTargetResult{
+		TargetKey: target.Key, TargetFingerprint: target.Fingerprint, Mode: mode, PayloadBytes: payloadBytes,
+		SamplesSent: count, SamplesReceived: len(latencies),
+	}
+	if count > 0 {
+		result.LossRatio = float64(count-len(latencies)) / float64(count)
+	}
+	if len(latencies) == 0 {
+		if lastError == "" {
+			lastError = "no_response"
+		}
+		result.ErrorCode = lastError
+		return result
+	}
+	sort.Float64s(latencies)
+	result.MinLatencyMS = latencies[0]
+	result.MaxLatencyMS = latencies[len(latencies)-1]
+	result.P50LatencyMS = floatQuantile(latencies, 0.50)
+	result.P95LatencyMS = floatQuantile(latencies, 0.95)
+	for _, latency := range latencies {
+		result.AverageLatencyMS += latency
+	}
+	result.AverageLatencyMS /= float64(len(latencies))
+	if len(latencies) < count {
+		result.ErrorCode = "partial_loss"
+	}
+	return result
+}
+
 func runTCPQualityMode(npingPath string, target v2.TCPQualityTarget, mode string, count, delayMS, timeoutMS int) v2.TCPQualityTargetResult {
 	result := v2.TCPQualityTargetResult{
-		TargetKey:   target.Key,
-		Mode:        mode,
-		SamplesSent: count,
+		TargetKey: target.Key, TargetFingerprint: target.Fingerprint,
+		Mode: mode, SamplesSent: count,
 	}
 	latencies := make([]float64, 0, count)
 	lastError := ""
