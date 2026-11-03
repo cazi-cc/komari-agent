@@ -253,12 +253,17 @@ install_dependencies() {
             [ -z "$missing_deps" ] || apk add --no-cache $missing_deps
             # Alpine splits nping out of the main nmap package.
             [ "$need_nping" -eq 0 ] || apk add --no-cache nmap-nping
+        elif command -v opkg >/dev/null 2>&1; then
+            log_info "Using opkg to install dependencies (OpenWrt/iStoreOS)..."
+            opkg update
+            [ -z "$missing_deps" ] || opkg install $missing_deps
+            [ "$need_nping" -eq 0 ] || opkg install nping
         elif command -v brew >/dev/null 2>&1; then
             log_info "Using Homebrew to install dependencies..."
             [ -z "$missing_deps" ] || brew install $missing_deps
             [ "$need_nping" -eq 0 ] || brew install nmap
         else
-            log_error "No supported package manager found (apt/dnf/yum/apk/brew)"
+            log_error "No supported package manager found (apt/dnf/yum/apk/opkg/brew)"
             exit 1
         fi
         
@@ -345,7 +350,7 @@ else
         release_api="${github_proxy}/https://api.github.com/repos/${agent_repository}/releases?per_page=20"
     fi
     release_download_url=$(
-        curl --fail --silent --show-error --location \
+        curl --fail --silent --show-error --location --connect-timeout 15 --max-time 60 \
             -H "Accept: application/vnd.github+json" \
             "$release_api" |
             grep -F "\"browser_download_url\": \"https://github.com/${agent_repository}/releases/download/" |
@@ -387,8 +392,15 @@ else
     log_step "Downloading $file_name directly..."
     log_info "URL: ${CYAN}$download_url${NC}"
 fi
-if ! curl --fail --show-error --location -o "$komari_agent_path" "$download_url"; then
-    log_error "Download failed"
+if ! curl --fail --show-error --location --connect-timeout 15 --max-time 180 -o "$komari_agent_path" "$download_url"; then
+    direct_url="https://github.com/${agent_repository}/releases/${download_path}/${file_name}"
+    if [ -z "$github_proxy" ] || ! curl --fail --show-error --location --connect-timeout 15 --max-time 180 -o "$komari_agent_path" "$direct_url"; then
+        log_error "Download failed from configured sources"
+        exit 1
+    fi
+fi
+if [ ! -s "$komari_agent_path" ]; then
+    log_error "Downloaded binary is empty"
     exit 1
 fi
 
