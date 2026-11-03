@@ -113,44 +113,18 @@ func appendErrorResult(result, err string) string {
 }
 
 func uploadTaskResult(taskID, result string, exitCode int, finishedAt time.Time) {
-	payload := map[string]interface{}{
-		"task_id":     taskID,
-		"result":      result,
-		"exit_code":   exitCode,
-		"finished_at": finishedAt,
+	payload := v2.Request{
+		JSONRPC: v2.Version,
+		Method:  v2.MethodAgentTaskResult,
+		Params: v2.TaskResultParams{
+			TaskID:     taskID,
+			Result:     result,
+			ExitCode:   exitCode,
+			FinishedAt: finishedAt,
+		},
 	}
-
-	jsonData, _ := json.Marshal(payload)
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/task/result?token=" + flags.Token
-
-	client := dnsresolver.GetHTTPClientWithPreference(30*time.Second, flags.PreferIPVersion)
-	maxRetry := flags.MaxRetries
-	for attempt := 0; attempt <= maxRetry; attempt++ {
-		req, err := http.NewRequest("POST", endpoint, bytes.NewReader(jsonData))
-		if err != nil {
-			log.Printf("Failed to create task result request: %v", err)
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if resp != nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-		}
-		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
-			return
-		}
-		if attempt == maxRetry {
-			if err != nil {
-				log.Printf("Failed to upload task result: %v", err)
-			} else if resp != nil {
-				log.Printf("Failed to upload task result: %s", resp.Status)
-			}
-			return
-		}
-		log.Printf("Failed to upload task result, retrying %d/%d", attempt+1, maxRetry)
-		time.Sleep(2 * time.Second)
+	if err := postV2RPC(payload); err != nil {
+		log.Printf("Failed to upload task result: %v", err)
 	}
 }
 
@@ -268,18 +242,19 @@ func httpPing(target string, timeout time.Duration) (int64, error) {
 		return -1, err
 	}
 	defer resp.Body.Close()
-	// Any HTTP response proves that DNS, TCP and (for HTTPS) TLS completed.
-	// Status-code health is reported separately by the detailed probe path.
-	return latency, nil
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		return latency, nil
+	}
+	return latency, errors.New("http status not ok")
 }
 
-func NewPingTask(conn *ws.SafeConn, protocolVersion int, taskID uint, pingType, pingTarget string, options v2.ProbeOptions) {
+func NewPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string, options v2.ProbeOptions) {
 	lightProbeGate.run(fmt.Sprintf("ping:%d", taskID), func() {
-		runPingTask(conn, protocolVersion, taskID, pingType, pingTarget, options)
+		runPingTask(conn, taskID, pingType, pingTarget, options)
 	})
 }
 
-func runPingTask(conn *ws.SafeConn, protocolVersion int, taskID uint, pingType, pingTarget string, options v2.ProbeOptions) {
+func runPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string, options v2.ProbeOptions) {
 	if taskID == 0 {
 		log.Printf("Invalid task ID: %d", taskID)
 		return
@@ -290,28 +265,15 @@ func runPingTask(conn *ws.SafeConn, protocolVersion int, taskID uint, pingType, 
 		pingResult = -1
 	}
 	finishedAt := time.Now()
-	payload := map[string]interface{}{
-		"type":        "ping_result",
-		"task_id":     taskID,
-		"ping_type":   pingType,
-		"value":       pingResult,
-		"details":     details,
-		"finished_at": finishedAt,
-	}
-	var wsPayload interface{} = payload
-	if protocolVersion >= 2 {
-		wsPayload = v2.BuildPingResultPayload(taskID, pingType, pingResult, details, finishedAt)
-	}
+	wsPayload := v2.BuildPingResultPayload(taskID, pingType, pingResult, details, finishedAt)
 	// https://github.com/komari-monitor/komari/commit/eb87a4fc330b7d1c407fa4ff70177615a4f50a1f
 	// -1 代表丢包，服务端计算
 	//if pingResult == -1 {
 	//	return
 	//}
 	if conn == nil {
-		if protocolVersion >= 2 {
-			if err := postV2RPC(wsPayload); err != nil {
-				log.Printf("Failed to upload ping result over POST: %v", err)
-			}
+		if err := postV2RPC(wsPayload); err != nil {
+			log.Printf("Failed to upload ping result over POST: %v", err)
 		}
 		return
 	}
@@ -348,11 +310,18 @@ func postV2RPC(payload interface{}) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: string(body)}
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: string(respBody)}
+	}
+	if len(bytes.TrimSpace(respBody)) > 0 {
+		if _, err := parseV2Response(respBody); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

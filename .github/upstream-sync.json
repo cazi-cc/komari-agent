@@ -1,0 +1,45 @@
+{
+  "upstream_repository": "komari-monitor/komari-agent",
+  "upstream_branch": "main",
+  "base_branch": "main",
+  "sync_branch": "sync/upstream-main",
+  "required_paths": [
+    "protocol/v2/jsonrpc.go",
+    "server/probe.go",
+    "server/probe_gate.go",
+    "server/tcp_quality.go",
+    "server/unlock_quality.go",
+    "tests/install_script_test.sh"
+  ],
+  "validation_commands": [
+    [
+      "python3",
+      ".github/scripts/test_sync_upstream.py",
+      "-v"
+    ],
+    [
+      "bash",
+      "tests/install_script_test.sh"
+    ],
+    [
+      "go",
+      "test",
+      "./..."
+    ]
+  ],
+  "protected_paths": [
+    ".github/scripts/sync_upstream.py",
+    ".github/scripts/test_sync_upstream.py",
+    ".github/upstream-sync.json",
+    ".github/workflows/snapshot.yml",
+    ".github/workflows/sync-upstream.yml",
+    "install.ps1",
+    "install.sh",
+    "protocol/v2/jsonrpc.go",
+    "server/probe.go",
+    "server/probe_gate.go",
+    "server/tcp_quality.go",
+    "server/unlock_quality.go",
+    "tests/install_script_test.sh"
+  ]
+}

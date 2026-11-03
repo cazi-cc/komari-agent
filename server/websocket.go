@@ -26,33 +26,34 @@ import (
 var (
 	v2AckMu       sync.Mutex
 	v2AckEventIDs []string
-	v2SeenEvents  = make(map[string]struct{})
+	v2SeenEvents  = make(map[string]time.Time)
 )
 
-const v2UpgradeRetryInterval = 2 * time.Minute
+const (
+	v2SeenEventTTL   = 10 * time.Minute
+	v2SeenEventLimit = 4096
+)
 
-func EstablishWebSocketConnection() {
+func EstablishWebSocketConnection(onRestartRequired func()) {
 	var conn *ws.SafeConn
 	defer func() {
 		if conn != nil {
 			conn.Close()
 		}
-		resetConnectionProtocolVersion()
 	}()
 	var err error
 	interval := math.Max(1, flags.Interval)
 
-	dataTicker := time.NewTicker(time.Duration(interval * float64(time.Second)))
+	// Connection recovery must not wait for the (possibly much longer) report
+	// interval. Poll the connection frequently and gate reports separately.
+	dataTicker := time.NewTicker(time.Second)
 	defer dataTicker.Stop()
+	reportInterval := time.Duration(interval * float64(time.Second))
+	nextReportAt := time.Now()
 
 	heartbeatTicker := time.NewTicker(30 * time.Second)
 	defer heartbeatTicker.Stop()
 
-	v2UpgradeTicker := time.NewTicker(v2UpgradeRetryInterval)
-	defer v2UpgradeTicker.Stop()
-
-	nextProtocol := requestedProtocolVersion()
-	activeProtocol := 0
 	var readDone <-chan struct{}
 
 	for {
@@ -61,27 +62,18 @@ func EstablishWebSocketConnection() {
 			if conn == nil {
 				log.Println("Attempting to connect to WebSocket...")
 				retry := 0
-				connectProtocol := nextProtocol
 				for retry <= flags.MaxRetries {
 					if retry > 0 {
 						log.Println("Retrying websocket connection, attempt:", retry)
 					}
-					websocketEndpoint := buildWebSocketEndpoint(connectProtocol)
+					websocketEndpoint := buildWebSocketEndpoint()
 					conn, err = connectWebSocket(websocketEndpoint)
 					if err == nil {
-						activeProtocol = connectProtocol
-						nextProtocol = connectProtocol
-						setConnectionProtocolVersion(activeProtocol)
-						log.Printf("WebSocket connected using v%d protocol", activeProtocol)
+						log.Println("WebSocket connected using v2 protocol")
 						done := make(chan struct{})
 						readDone = done
-						go handleWebSocketMessages(conn, activeProtocol, done)
+						go handleWebSocketMessages(conn, done, onRestartRequired)
 						break
-					} else if shouldFallbackToV1(connectProtocol, err) {
-						log.Printf("v2 WebSocket endpoint failed (%v), temporarily falling back to v1", err)
-						connectProtocol = 1
-						retry = 0
-						continue
 					} else {
 						log.Println("Failed to connect to WebSocket:", err)
 					}
@@ -91,44 +83,29 @@ func EstablishWebSocketConnection() {
 
 				if retry > flags.MaxRetries {
 					log.Println("Max retries reached.")
-					if connectProtocol < 2 {
-						return
-					}
-					conn, err = runPostFallback(buildWebSocketEndpoint(connectProtocol), interval)
+					conn, err = runPostFallback(buildWebSocketEndpoint(), interval, onRestartRequired)
 					if err != nil {
-						if connectProtocol >= 2 && isV2ProtocolFailure(err) {
-							log.Printf("v2 POST fallback failed (%v), temporarily falling back to v1", err)
-							nextProtocol = 1
-							setConnectionProtocolVersion(1)
-							continue
-						}
 						log.Println("POST fallback stopped:", err)
 						return
 					}
 					log.Println("WebSocket recovered from POST fallback")
-					activeProtocol = connectProtocol
-					nextProtocol = connectProtocol
-					setConnectionProtocolVersion(activeProtocol)
 					done := make(chan struct{})
 					readDone = done
-					go handleWebSocketMessages(conn, activeProtocol, done)
+					go handleWebSocketMessages(conn, done, onRestartRequired)
 				}
 			}
-
-			data := monitoring.GenerateReport()
-			if activeProtocol >= 2 {
-				data = v2.BuildReportPayload(data)
+			if conn == nil || time.Now().Before(nextReportAt) {
+				continue
 			}
+			nextReportAt = time.Now().Add(reportInterval)
+
+			data := v2.BuildReportPayload(monitoring.GenerateReport())
 			err = conn.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
 				log.Println("Failed to send WebSocket message:", err)
 				conn.Close()
 				conn = nil // Mark connection as dead
 				readDone = nil
-				resetConnectionProtocolVersion()
-				if requestedProtocolVersion() >= 2 {
-					nextProtocol = 2
-				}
 				continue
 			}
 		case <-heartbeatTicker.C:
@@ -139,21 +116,7 @@ func EstablishWebSocketConnection() {
 					conn.Close()
 					conn = nil // Mark connection as dead
 					readDone = nil
-					resetConnectionProtocolVersion()
-					if requestedProtocolVersion() >= 2 {
-						nextProtocol = 2
-					}
 				}
-			}
-		case <-v2UpgradeTicker.C:
-			if conn != nil && activeProtocol == 1 && requestedProtocolVersion() >= 2 {
-				log.Println("Retrying v2 WebSocket after temporary v1 fallback")
-				conn.Close()
-				conn = nil
-				readDone = nil
-				activeProtocol = 0
-				resetConnectionProtocolVersion()
-				nextProtocol = 2
 			}
 		case <-readDone:
 			log.Println("WebSocket disconnected")
@@ -162,21 +125,12 @@ func EstablishWebSocketConnection() {
 				conn = nil
 			}
 			readDone = nil
-			activeProtocol = 0
-			resetConnectionProtocolVersion()
-			if requestedProtocolVersion() >= 2 {
-				nextProtocol = 2
-			}
 		}
 	}
 }
 
-func buildWebSocketEndpoint(protocolVersion int) string {
-	path := "/api/clients/report?token=" + flags.Token
-	if protocolVersion >= 2 {
-		path = "/api/clients/v2/rpc?token=" + flags.Token
-	}
-	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + path
+func buildWebSocketEndpoint() string {
+	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
 	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
 	if convertedEndpoint, err := utils.ConvertIDNToASCII(websocketEndpoint); err == nil {
 		return convertedEndpoint
@@ -186,12 +140,11 @@ func buildWebSocketEndpoint(protocolVersion int) string {
 	return websocketEndpoint
 }
 
-func runPostFallback(websocketEndpoint string, interval float64) (*ws.SafeConn, error) {
+func runPostFallback(websocketEndpoint string, interval float64, onRestartRequired func()) (*ws.SafeConn, error) {
 	log.Println("Entering v2 POST fallback mode")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pullErr := make(chan error, 1)
-	go runV2PullLoop(ctx, pullErr)
+	go runV2PullLoop(ctx, onRestartRequired)
 
 	reportTicker := time.NewTicker(time.Duration(interval * float64(time.Second)))
 	defer reportTicker.Stop()
@@ -205,30 +158,22 @@ func runPostFallback(websocketEndpoint string, interval float64) (*ws.SafeConn, 
 			ackIDs := snapshotV2AckEventIDs()
 			resp, err := postV2Request(v2.BuildReportRequest(reportID, monitoring.GenerateReport(), ackIDs))
 			if err != nil {
-				if shouldFallbackToV1(2, err) {
-					return nil, err
-				}
 				log.Println("Failed to POST v2 report:", err)
 				continue
 			}
 			clearV2AckEventIDs(ackIDs)
-			processV2ResponseEvents(resp)
+			processV2ResponseEvents(resp, onRestartRequired)
 		case <-reconnectTicker.C:
 			conn, err := connectWebSocket(websocketEndpoint)
 			if err == nil {
 				return conn, nil
 			}
-			if shouldFallbackToV1(2, err) {
-				return nil, err
-			}
 			log.Println("POST fallback WebSocket recovery failed:", err)
-		case err := <-pullErr:
-			return nil, err
 		}
 	}
 }
 
-func runV2PullLoop(ctx context.Context, errCh chan<- error) {
+func runV2PullLoop(ctx context.Context, onRestartRequired func()) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -238,7 +183,7 @@ func runV2PullLoop(ctx context.Context, errCh chan<- error) {
 		pullID := fmt.Sprintf("pull-%d", time.Now().UnixNano())
 		ackIDs := snapshotV2AckEventIDs()
 		payload := v2.NewRequest(pullID, v2.MethodAgentPull, map[string]interface{}{
-			"capabilities":  []string{"exec", "ping", "tcp_quality", "unlock_quality", "message", "event", "terminal"},
+			"capabilities":  []string{"exec", "ping", "tcp_quality", "unlock_quality", "message", "event", "terminal", "file", "startup_config", "switch_version"},
 			"ack_event_ids": ackIDs,
 		})
 		resp, err := postV2RequestContext(ctx, payload)
@@ -246,19 +191,18 @@ func runV2PullLoop(ctx context.Context, errCh chan<- error) {
 			if ctx.Err() != nil {
 				return
 			}
-			if shouldFallbackToV1(2, err) {
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
 			log.Println("Failed to POST v2 pull:", err)
-			time.Sleep(time.Duration(flags.ReconnectInterval) * time.Second)
+			timer := time.NewTimer(time.Duration(flags.ReconnectInterval) * time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 			continue
 		}
 		clearV2AckEventIDs(ackIDs)
-		processV2ResponseEvents(resp)
+		processV2ResponseEvents(resp, onRestartRequired)
 	}
 }
 
@@ -301,11 +245,10 @@ func postV2RequestContext(ctx context.Context, payload []byte) (*v2.Response, er
 	if err != nil {
 		return nil, err
 	}
-	resetV2ProtocolFailures(2)
 	return rpcResp, nil
 }
 
-func processV2ResponseEvents(resp *v2.Response) {
+func processV2ResponseEvents(resp *v2.Response, onRestartRequired func()) {
 	if resp == nil || resp.Result == nil {
 		return
 	}
@@ -315,7 +258,7 @@ func processV2ResponseEvents(resp *v2.Response) {
 		return
 	}
 	for _, event := range result.Events {
-		if processV2Event(nil, event.Method, event.Params, event.ID) {
+		if processV2Event(nil, event.Method, event.Params, event.ID, onRestartRequired) {
 			addV2AckEventID(event.ID)
 		}
 	}
@@ -361,10 +304,28 @@ func markV2EventSeen(id string) bool {
 	}
 	v2AckMu.Lock()
 	defer v2AckMu.Unlock()
+	now := time.Now()
+	for eventID, seenAt := range v2SeenEvents {
+		if now.Sub(seenAt) > v2SeenEventTTL {
+			delete(v2SeenEvents, eventID)
+		}
+	}
 	if _, ok := v2SeenEvents[id]; ok {
 		return false
 	}
-	v2SeenEvents[id] = struct{}{}
+	if len(v2SeenEvents) >= v2SeenEventLimit {
+		var oldestID string
+		var oldest time.Time
+		for eventID, seenAt := range v2SeenEvents {
+			if oldestID == "" || seenAt.Before(oldest) {
+				oldestID, oldest = eventID, seenAt
+			}
+		}
+		if oldestID != "" {
+			delete(v2SeenEvents, oldestID)
+		}
+	}
+	v2SeenEvents[id] = now
 	return true
 }
 
@@ -382,7 +343,7 @@ func connectWebSocket(websocketEndpoint string) (*ws.SafeConn, error) {
 	return ws.NewSafeConn(conn), nil
 }
 
-func handleWebSocketMessages(conn *ws.SafeConn, protocolVersion int, done chan<- struct{}) {
+func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}, onRestartRequired func()) {
 	defer close(done)
 	for {
 		_, message_raw, err := conn.ReadMessage()
@@ -390,48 +351,21 @@ func handleWebSocketMessages(conn *ws.SafeConn, protocolVersion int, done chan<-
 			log.Println("WebSocket read error:", err)
 			return
 		}
-		var message struct {
-			JSONRPC string      `json:"jsonrpc,omitempty"`
-			Method  string      `json:"method,omitempty"`
-			Params  interface{} `json:"params,omitempty"`
-			Message string      `json:"message"`
-			// Terminal
-			TerminalId string `json:"request_id,omitempty"`
-			// Remote Exec
-			ExecCommand string `json:"command,omitempty"`
-			ExecTaskID  string `json:"task_id,omitempty"`
-			// Ping
-			PingTaskID  uint            `json:"ping_task_id,omitempty"`
-			PingType    string          `json:"ping_type,omitempty"`
-			PingTarget  string          `json:"ping_target,omitempty"`
-			PingOptions v2.ProbeOptions `json:"ping_options,omitempty"`
-		}
+		var message v2.Request
 		err = json.Unmarshal(message_raw, &message)
 		if err != nil {
 			log.Println("Bad ws message:", err)
 			continue
 		}
-		if message.JSONRPC == v2.Version && protocolVersion >= 2 {
-			processV2Event(conn, message.Method, message.Params, "")
+		if message.JSONRPC != v2.Version {
+			log.Printf("Bad v2 ws message version %q", message.JSONRPC)
 			continue
 		}
-
-		if message.Message == "terminal" || message.TerminalId != "" {
-			go establishTerminalConnection(flags.Token, message.TerminalId, flags.Endpoint)
-			continue
-		}
-		if message.Message == "exec" {
-			go NewTask(message.ExecTaskID, message.ExecCommand)
-			continue
-		}
-		if message.Message == "ping" || message.PingTaskID != 0 || message.PingType != "" || message.PingTarget != "" {
-			go NewPingTask(conn, protocolVersion, message.PingTaskID, message.PingType, message.PingTarget, message.PingOptions)
-			continue
-		}
+		processV2Event(conn, message.Method, message.Params, "", onRestartRequired)
 	}
 }
 
-func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventID string) bool {
+func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventID string, onRestartRequired func()) bool {
 	if !markV2EventSeen(eventID) {
 		return true
 	}
@@ -450,7 +384,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 	case v2.MethodAgentPing:
 		var p v2.PingParams
 		if err := v2.BindParams(params, &p); err == nil {
-			go NewPingTask(conn, 2, p.TaskID, p.Type, p.Target, p.Options)
+			go NewPingTask(conn, p.TaskID, p.Type, p.Target, p.Options)
 			return true
 		} else {
 			log.Printf("bad v2 ping params: %v", err)
@@ -484,6 +418,29 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 	case v2.MethodAgentMessage, v2.MethodAgentEvent:
 		log.Printf("received v2 %s: %+v", method, params)
 		return true
+	case v2.MethodAgentFile:
+		var operation v2.FileOperation
+		if err := v2.BindParams(params, &operation); err == nil {
+			go handleFileOperation(operation)
+			return true
+		} else {
+			log.Printf("bad v2 file params: %v", err)
+		}
+	case v2.MethodAgentStartupConfig:
+		var p v2.StartupConfigParams
+		if err := v2.BindParams(params, &p); err == nil && p.RequestID != "" {
+			go handleStartupConfig(p)
+			return true
+		}
+		log.Print("bad v2 startup configuration params")
+	case v2.MethodAgentSwitchVersion:
+		var p v2.SwitchVersionParams
+		if err := v2.BindParams(params, &p); err != nil {
+			log.Printf("bad v2 switch version params: %v", err)
+		} else {
+			go switchAgentVersion(p.Version, onRestartRequired)
+			return true
+		}
 	default:
 		log.Printf("unknown v2 event method %s", method)
 	}
@@ -514,7 +471,7 @@ func establishTerminalConnection(token, id, endpoint string) {
 	}
 
 	// 启动终端
-	terminal.StartTerminal(conn)
+	terminal.StartTerminal(conn, id)
 	if conn != nil {
 		conn.Close()
 	}
